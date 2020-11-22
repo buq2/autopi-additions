@@ -6,12 +6,14 @@ import functools
 import logging
 from collections import defaultdict
 
-DB_FILENAME='/home/pi/network_stats.slv'
+DB_FILENAME_DEV='network_stats.slv'
+DB_FILENAME='/home/pi/'+DB_FILENAME_DEV
 RECEIVED='received'
 TRANSMITTED='transmitted'
 TIMESERIES_NAME='timeseries'
 MAX_TIMESERIESPOINT_LIFE = datetime.timedelta(days=2)
 MIN_DIFFERENCE_BETWEEN_TIMESERIES_POINTS = datetime.timedelta(seconds=50)
+FORCE_MONOTONIC_TIMESERIES=True
 
 log = logging.getLogger(__name__)
 
@@ -60,10 +62,25 @@ class Timeseries:
             log.info('Previous timepoint too close, ignoring new point')
             return
 
-        if len(self.__data) == 0 or self.__data[-1] < time:
-            self.__sorted = True
-        else:
-            self.__sorted = False
+    
+        if len(self) != 0 and FORCE_MONOTONIC_TIMESERIES:
+            # Check for monotonicness
+            # This is needed as autopi modem resets transferred bytes each time so if we see that previous values are lower than current ones
+            # we actually need to add current values to previous ones
+            # Not perfect, but will hopefully work
+
+            prev = self.get_latest()
+            prev_data = prev.data
+
+            for key, val in point.items():
+                if key in prev_data:
+                    prev_val = prev_data[key]
+                    if prev_val > val:
+                        # Data would not monotonic, try to fix by summing
+                        # This works if modem was reset and all values were zeroed
+                        val = prev_val + val
+                        point[key] = val
+
         self.__data.append(TimeseriesPoint(time, point))
 
     def get_latest(self):
@@ -111,7 +128,8 @@ class Timeseries:
         return len(self.__data)
 
     def sort(self):
-        self.__data.sort(key = lambda x : x[0])
+        if len(self) > 0:
+            self.__data.sort(key = lambda x : x.datetime)
         self.__sorted = True
 
 def __calculate_network_stats(ts, delta):
@@ -156,6 +174,17 @@ def __update_network_timeseries(timeseries):
         if len(ts) == 0:
             del timeseries[key]
 
+def clear():
+    """
+    Clear database of network usage
+    """
+
+    try:
+        db = shelve.open(DB_FILENAME)
+    except:
+        db = shelve.open(DB_FILENAME_DEV)
+    db.clear()
+
 def get_network_usage():
     """
     Return network statistics for last 24h
@@ -163,7 +192,10 @@ def get_network_usage():
     {<interface_name>:{'received':bytes, 'transmitted':bytes}}
     """
     # Get history
-    db = shelve.open(DB_FILENAME)
+    try:
+        db = shelve.open(DB_FILENAME)
+    except:
+        db = shelve.open(DB_FILENAME_DEV)
 
     if TIMESERIES_NAME in db:
         timeseries = db[TIMESERIES_NAME]
@@ -187,4 +219,4 @@ def help():
     return __salt__["sys.doc"]("my_network")
 
 if __name__ == '__main__':
-    get_network_usage()
+    print(get_network_usage())
