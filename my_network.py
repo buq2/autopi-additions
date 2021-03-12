@@ -4,7 +4,7 @@ import datetime
 import bisect
 import functools
 import logging
-from collections import defaultdict
+import copy
 
 DB_FILENAME_DEV='network_stats.slv'
 DB_FILENAME='/home/pi/'+DB_FILENAME_DEV
@@ -40,7 +40,46 @@ class TimeseriesPoint:
 
     def __init__(self, datetime, data):
         self.datetime = datetime
-        self.data = data
+        self.__data = data
+        self.__monotonic_fix = None
+
+    def ensure_monotonicness(self, prev):
+        # Make sure that the data is monotonically increasing
+
+        prev_data = prev.get_data(with_monotonic_fix=False)
+        data = self.get_data(with_monotonic_fix=False)
+        for key, val in data.items():
+            if key in prev_data:
+                prev_val = prev_data[key]
+                if prev_val > val:
+                    # Data would not monotonic, try to fix
+                    # This works if modem was reset and all values were zeroed
+                    self.__fix_monotonic(prev)
+                    return
+
+        # This point is still monotonic, we can use previous monotonicness data
+        self.__set_monotonic(prev)
+
+    def __fix_monotonic(self, other):
+        self.__monotonic_fix = other.get_data(with_monotonic_fix=True)
+
+    def __set_monotonic(self, other):
+        self.__monotonic_fix = other.__monotonic_fix
+
+    def get_data(self, with_monotonic_fix=True):
+        out = copy.copy(self.__data)
+
+        if not with_monotonic_fix or self.__monotonic_fix is None:
+            return out
+
+        if isinstance(out, dict):
+            for key,val in out.items():
+                out[key] += self.__monotonic_fix.get(key, 0)
+        else:
+            out += self.__monotonic_fix
+
+        return out
+
     
     def __lt__(self, other):
         if isinstance(other, TimeseriesPoint):
@@ -62,26 +101,24 @@ class Timeseries:
             log.info('Previous timepoint too close, ignoring new point')
             return
 
-    
-        if len(self) != 0 and FORCE_MONOTONIC_TIMESERIES:
-            # Check for monotonicness
-            # This is needed as autopi modem resets transferred bytes each time so if we see that previous values are lower than current ones
-            # we actually need to add current values to previous ones
-            # Not perfect, but will hopefully work
+        ts_point = TimeseriesPoint(time, point)
 
-            prev = self.get_latest()
-            prev_data = prev.data
+        if FORCE_MONOTONIC_TIMESERIES:
+            self.__check_monotonicness(ts_point)
 
-            for key, val in point.items():
-                if key in prev_data:
-                    prev_val = prev_data[key]
-                    if prev_val > val:
-                        # Data would not monotonic, try to fix by summing
-                        # This works if modem was reset and all values were zeroed
-                        val = prev_val + val
-                        point[key] = val
+        self.__data.append(ts_point)
 
-        self.__data.append(TimeseriesPoint(time, point))
+    def __check_monotonicness(self, point):
+        # Check for monotonicness
+        # This is needed as autopi modem resets transferred bytes each time autopi sleeps
+        # so if we see that previous values are lower than current ones, we need to fix them
+
+        if len(self) == 0:
+            # No data, can not yet fix issues (/there is no issues)
+            return
+
+        prev = self.get_latest()
+        point.ensure_monotonicness(prev)
 
     def get_latest(self):
         if not self.__sorted:
@@ -138,8 +175,8 @@ def __calculate_network_stats(ts, delta):
     prev = ts.get_closest_to_time(latest.datetime - delta)
     real_delta = latest.datetime - prev.datetime
 
-    data_latest = latest.data
-    data_prev = prev.data
+    data_latest = latest.get_data()
+    data_prev = prev.get_data()
     for key, val_latest in data_latest.items():
         if key not in data_prev:
             continue
