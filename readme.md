@@ -1,3 +1,5 @@
+![Build](https://github.com/buq2/autopi-additions/actions/workflows/main.yml/badge.svg)
+
 # Usage
 
 Copy content of `my_xxx.py`scripts to https://my.autopi.io/#/custom-code .
