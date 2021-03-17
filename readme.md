@@ -17,3 +17,7 @@ After these setups and waiting some data to be collected, you should be able to 
 docker build -t autopi_additions .
 docker run --rm autopi_additions # runs pytest
 ```
+
+# Wireguard
+
+[I wrote a short description how to set up Wireguard VPN for AutoPi use.](readme_wireguard.md)
