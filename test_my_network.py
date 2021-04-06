@@ -3,6 +3,17 @@ import pytest
 import datetime
 import numpy as np
 
+use_real_time = True
+fake_time = datetime.datetime.now()
+def faked_current_time(usage_reason):
+    global use_real_time
+    global fake_time
+
+    if use_real_time:
+        return datetime.datetime.now()
+    else:
+        return fake_time
+
 
 class FakedNet:
     def __init__(self):
@@ -13,6 +24,10 @@ class FakedNet:
         self.total_transmitted = 0
 
         self.name = 'net'
+
+    def progress_time(self, timedelta=datetime.timedelta(seconds=60*60)):
+        global fake_time
+        fake_time = fake_time + timedelta
 
     def get_fake_network_interface_state(self):
         out = {}
@@ -44,10 +59,12 @@ class FakedNet:
 def net():
     my_network.MIN_DIFFERENCE_BETWEEN_TIMESERIES_POINTS = datetime.timedelta(
         seconds=0)
+    my_network.get_current_time = faked_current_time
     my_network.clear()
     net = FakedNet()
     my_network.__get_network_interface_state = \
         lambda: net.get_fake_network_interface_state()
+
     return net
 
 
@@ -119,6 +136,25 @@ def test_with_reset3(net):
         state = my_network.get_network_usage()
         check(net, state)
         net.increase_net_usage()
+
+def test_removing_old_data(net):
+    global use_real_time
+    use_real_time = False
+    for i in range(5):
+        state = my_network.get_network_usage()
+        check(net, state)
+        net.increase_net_usage()
+        net.progress_time()
+    state = my_network.get_network_usage()
+    check(net, state)
+    net.progress_time(my_network.MAX_TIMESERIESPOINT_LIFE)
+    state = my_network.get_network_usage()
+
+    # Old data has been deleted
+    assert state[net.name][my_network.RECEIVED] == 0
+    assert state[net.name][my_network.TRANSMITTED] == 0
+
+    use_real_time = True
 
 
 if __name__ == '__main__':
