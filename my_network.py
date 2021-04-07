@@ -1,5 +1,5 @@
 #!/bin/python3
-import pickle
+import json
 import datetime
 import bisect
 import functools
@@ -7,8 +7,8 @@ import logging
 import copy
 import os
 
-DB_FILENAME_DEV = 'network_stats.slv'
-DB_FILENAME = '/home/pi/' + DB_FILENAME_DEV
+DB_FILENAME_DEV = 'network_stats.json'
+DB_FILENAME = '/tmp/' + DB_FILENAME_DEV
 RECEIVED = 'received'
 TRANSMITTED = 'transmitted'
 TIMESERIES_NAME = 'timeseries'
@@ -41,15 +41,23 @@ def __get_network_interface_state():
 
 
 @functools.total_ordering
-class TimeseriesPoint:
+class TimeseriesPoint(dict):
     @staticmethod
     def invalid():
         return TimeseriesPoint(None, None)
 
-    def __init__(self, datetime, data):
-        self.datetime = datetime
-        self.__data = data
-        self.__monotonic_fix = None
+    @staticmethod
+    def fromDict(d):
+        return TimeseriesPoint(dt=d['datetime'], data=d['__data'], monotonic_fix=d['__monotonic_fix'])
+
+    def __init__(self, dt, data, monotonic_fix=None):
+        try:
+            str_class = basestring
+        except NameError:
+            str_class = str
+        if isinstance(dt, str_class):
+            dt = datetime.datetime.strptime(dt,'%Y-%m-%d %H:%M:%S.%f')
+        dict.__init__(self, datetime=dt, __data=data, __monotonic_fix=monotonic_fix)
 
     def ensure_monotonicness(self, prev):
         # Make sure that the data is monotonically increasing
@@ -94,11 +102,40 @@ class TimeseriesPoint:
         elif isinstance(other, datetime.datetime):
             return self.datetime < other
 
+    def get_datetime(self):
+        return self['datetime']
 
-class Timeseries:
+    def set_datetime(self, val):
+        self['datetime'] = val
+
+    def __get_data(self):
+        return self['__data']
+
+    def __set_data(self, val):
+        self['__data'] = val
+
+    def __get_monotonic_fix(self):
+        return self['__monotonic_fix']
+
+    def __set_monotonic_fix(self, val):
+        self['__monotonic_fix'] = val
+
+    datetime = property(get_datetime, set_datetime)
+    __data = property(__get_data, __set_data)
+    __monotonic_fix = property(__get_monotonic_fix, __set_monotonic_fix)
+
+
+class Timeseries(dict):
+    @staticmethod
+    def fromDict(d):
+        out = Timeseries()
+        out.__sorted = d['__sorted']
+        for p in d['__data']:
+            out.__data.append(TimeseriesPoint.fromDict(p))
+        return out
+
     def __init__(self):
-        self.__data = []
-        self.__sorted = False
+        dict.__init__(self, __data=[], __sorted=False)
 
     def add(self, point, time=None):
         if time is None:
@@ -170,7 +207,7 @@ class Timeseries:
 
         # Delete old ones if too many points
         if len(self.__data) > MAX_NUMBER_OF_TIMESERIES_POINTS:
-            print('Too many timeseries points, deleting oldest ones')
+            log.info('Too many timeseries points, deleting oldest ones')
             del self.__data[-MAX_NUMBER_OF_TIMESERIES_POINTS:]
 
     def __str__(self):
@@ -183,6 +220,21 @@ class Timeseries:
         if len(self) > 0:
             self.__data.sort(key=lambda x: x.datetime)
         self.__sorted = True
+
+    def __get_data(self):
+        return self['__data']
+
+    def __set_data(self, val):
+        self['__data'] = val
+
+    def __get_sorted(self):
+        return self['__sorted']
+
+    def __set_sorted(self, val):
+        self['__sorted'] = val
+
+    __data = property(__get_data, __set_data)
+    __sorted = property(__get_sorted, __set_sorted)
 
 
 def __calculate_network_stats(ts, delta, weighted=False):
@@ -249,13 +301,13 @@ def get_db():
 
     try:
         if os.path.exists(DB_FILENAME):
-            with open(DB_FILENAME,'rb') as f:
-                db = pickle.load(f)
+            with open(DB_FILENAME,'r') as f:
+                db = json.load(f)
         elif os.path.exists(DB_FILENAME_DEV):
-            with open(DB_FILENAME_DEV,'rb') as f:
-                db = pickle.load(f)
-    except:
-        print('Failed to load db, starting new')
+            with open(DB_FILENAME_DEV,'r') as f:
+                db = json.load(f)
+    except Exception as e:
+        log.error('Failed to load db, starting new. Exception: ' + str(e))
 
     return db
 
@@ -267,15 +319,15 @@ def write_db(db):
         fname = DB_FILENAME_DEV
 
     if fname is not None:
-        with open(fname, 'wb') as f:
-            pickle.dump(db, f)
+        with open(fname, 'w') as f:
+            json.dump(db, f, default=str)
     else:
         try:
-            with open(DB_FILENAME, 'wb') as f:
-                pickle.dump(db, f)
+            with open(DB_FILENAME, 'w') as f:
+                json.dump(db, f, default=str)
         except:
-            with open(DB_FILENAME_DEV, 'wb') as f:
-                pickle.dump(db, f)
+            with open(DB_FILENAME_DEV, 'w') as f:
+                json.dump(db, f, default=str)
 
 
 def clear():
@@ -283,9 +335,7 @@ def clear():
     Clear database of network usage
     """
 
-    db = get_db()
-    db.clear()
-    write_db(db)
+    write_db({})
 
 
 def get_network_usage():
@@ -297,11 +347,12 @@ def get_network_usage():
     # Get history
     db = get_db()
 
+    timeseries = {}
     if TIMESERIES_NAME in db:
-        timeseries = db[TIMESERIES_NAME]
+        for key, val in db[TIMESERIES_NAME].items():
+            timeseries[key] = Timeseries.fromDict(val)
     else:
         log.info('Initializing timeseries')
-        timeseries = {}
 
     __update_network_timeseries(timeseries)
 

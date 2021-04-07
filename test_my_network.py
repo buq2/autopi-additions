@@ -47,9 +47,9 @@ class FakedNet:
 
     def reset(self):
         # Set non totals to smaller than previously
-        self.received = np.min([np.random.randint(0, 10), self.received - 1])
-        self.transmitted = np.min(
-            [np.random.randint(0, 10), self.transmitted - 1])
+        self.received = int(np.min([np.random.randint(0, 10), self.received - 1]))
+        self.transmitted = int(np.min(
+            [np.random.randint(0, 10), self.transmitted - 1]))
 
         self.total_received += self.received
         self.total_transmitted += self.transmitted
